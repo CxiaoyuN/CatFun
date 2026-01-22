@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - "release-v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (手动运行时可指定)"
+        required: false
+        default: "manual"
 
 env:
   FLUTTER_VERSION: 3.35.3
@@ -14,7 +20,6 @@ jobs:
 
   build-windows:
     runs-on: windows-latest
-
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -26,24 +31,19 @@ jobs:
           cache: true
       - name: Download kitty.umd.js from gist
         run: |
-          echo "📥 Downloading kitty.umd.js from gist..."
           mkdir -p packages/xi/assets/js
           curl -L -o packages/xi/assets/js/kitty.umd.js "https://gist.githubusercontent.com/d1y/${{ env.GIST_ID }}/raw/kitty.umd.js"
-          echo "✅ Downloaded kitty.umd.js"
         shell: bash
-
       - name: Install project dependencies
         run: |
           ./script/fetch_git_info.ps1
           flutter pub get
           flutter pub run build_runner build
-          # dart run script/add_builtin.dart > lib/builtin/maccms/maccms.dart
-          $env:version = "${{ github.ref_name }}" -replace "^release-v", ""
+          $env:version = "${{ github.event.inputs.version || github.ref_name }}" -replace "^release-v", ""
           dart run script/replace_version.dart
       - name: Generate templates
         run: |
-          cd JS/cli
-          bun install
+          cd JS/cli && bun install
           cd ../../packages/xi/lib/adapters/templates
           bun install
           bun run build
@@ -69,10 +69,8 @@ jobs:
 
   build-linux:
     runs-on: ubuntu-22.04
-
     env:
       TARBALL_NAME: catmovie-linux-x86_64.tar.gz
-
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -86,32 +84,27 @@ jobs:
         run: flutter config --no-analytics
       - name: Download kitty.umd.js from gist
         run: |
-          echo "📥 Downloading kitty.umd.js from gist..."
           mkdir -p packages/xi/assets/js
-          curl -L -o packages/xi/assets/js/kitty.umd.js \
-            "https://gist.githubusercontent.com/d1y/${{ env.GIST_ID }}/raw/kitty.umd.js"
-          echo "✅ Downloaded kitty.umd.js"
-
+          curl -L -o packages/xi/assets/js/kitty.umd.js "https://gist.githubusercontent.com/d1y/${{ env.GIST_ID }}/raw/kitty.umd.js"
       - name: Install dependencies
         run: |
           flutter pub get
           flutter pub run build_runner build
       - name: Generate templates
         run: |
-          cd JS/cli
-          bun install
+          cd JS/cli && bun install
           cd ../../packages/xi/lib/adapters/templates
           bun install
           bun run build
       - name: Enable Linux support
         run: flutter config --enable-linux-desktop
-      - name: Install dependencies
+      - name: Install system dependencies
         run: sudo apt update && sudo apt-get install -y ${{ env.LINUX_DEPENDENCIES }} || true
       - name: Build
         run: |
           bash script/fetch_git_info.sh
-          # dart run script/add_builtin.dart > lib/builtin/maccms/maccms.dart
-          export version=$(echo "${{ github.ref_name }}" | sed 's/^release-v//')
+          export version="${{ github.event.inputs.version || github.ref_name }}"
+          version=$(echo "$version" | sed 's/^release-v//')
           dart run script/replace_version.dart
           flutter build linux --release
       - name: Create tarball
@@ -153,27 +146,21 @@ jobs:
         run: node script/draft-release-notes.js > release-notes.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Download kitty.umd.js from gist
         run: |
-          echo "📥 Downloading kitty.umd.js from gist..."
           mkdir -p packages/xi/assets/js
-          curl -L -o packages/xi/assets/js/kitty.umd.js \
-            "https://gist.githubusercontent.com/d1y/${{ env.GIST_ID }}/raw/kitty.umd.js"
-          echo "✅ Downloaded kitty.umd.js"
-
+          curl -L -o packages/xi/assets/js/kitty.umd.js "https://gist.githubusercontent.com/d1y/${{ env.GIST_ID }}/raw/kitty.umd.js"
       - name: Build android apk
         run: |
           bash script/fetch_git_info.sh
           flutter pub get
           flutter pub run build_runner build
-          # dart run script/add_builtin.dart > lib/builtin/maccms/maccms.dart
-          export version=$(echo "${{ github.ref_name }}" | sed 's/^release-v//')
+          export version="${{ github.event.inputs.version || github.ref_name }}"
+          version=$(echo "$version" | sed 's/^release-v//')
           dart run script/replace_version.dart
       - name: Generate templates
         run: |
-          cd JS/cli
-          bun install
+          cd JS/cli && bun install
           cd ../../packages/xi/lib/adapters/templates
           bun install
           bun run build
@@ -185,7 +172,6 @@ jobs:
           cp build/app/outputs/flutter-apk/app-release.apk catmovie-universal.apk
           cp build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk catmovie-legacy.apk
           cp build/app/outputs/flutter-apk/app-x86_64-release.apk catmovie-x86_64.apk
-
       - name: Build iOS ipa
         run: |
           flutter build ios --release --no-codesign
@@ -195,21 +181,18 @@ jobs:
           ln -s ../Runner.app
           cd ..
           zip -r catmovie.ipa Payload
-
       - name: Build macOS
         run: |
           flutter config --enable-macos-desktop
           flutter build macos --release
           cd build/macos/Build/Products/Release
           zip -ry catmovie-mac.zip 猫趣.app/*
-
       - uses: actions/download-artifact@v4
         with:
           name: windows
       - uses: actions/download-artifact@v4
         with:
           name: x86_64_linux
-
       - uses: softprops/action-gh-release@v2
         with:
           body_path: release-notes.txt
