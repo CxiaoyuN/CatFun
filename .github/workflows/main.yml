@@ -1,5 +1,6 @@
 name: iOS Debug 打包（Flutter 适配）
 
+# 触发条件：推送到main分支、PR、手动触发
 on:
   push:
     branches: [main]
@@ -9,48 +10,82 @@ on:
 
 jobs:
   build-ios:
+    # 指定 macOS 环境（必须）
     runs-on: macos-latest
     steps:
+      # 1. 拉取仓库代码
       - name: 拉取代码
         uses: actions/checkout@v4
 
-      - name: 安装 Flutter 环境
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: latest-stable  # 匹配项目使用的 Flutter 版本，如 3.16.0
-          channel: stable
+      # 2. 手动安装 Flutter（绕过 action 版本解析问题，稳定可靠）
+      - name: 手动安装 Flutter 环境
+        run: |
+          # 替换为你项目实际使用的 Flutter 版本（示例：3.22.0 稳定版，arm64 适配 M1/M2）
+          FLUTTER_VERSION="3.22.0"
+          # 下载指定版本 Flutter
+          curl -O https://storage.googleapis.com/flutter_infra_release/releases/stable/macos/flutter_macos_arm64_${FLUTTER_VERSION}-stable.zip
+          # 解压到用户目录
+          unzip -q flutter_macos_arm64_${FLUTTER_VERSION}-stable.zip -d $HOME
+          # 配置环境变量，让系统识别 flutter 命令
+          echo "$HOME/flutter/bin" >> $GITHUB_PATH
+          # 验证 Flutter 安装
+          flutter --version
+          # 运行 flutter doctor 检查环境（可选，便于排查问题）
+          flutter doctor
 
+      # 3. Flutter 依赖安装 + 生成 iOS 核心配置文件（解决 Generated.xcconfig 缺失）
+      - name: Flutter 依赖安装 & 生成 iOS 配置
+        run: |
+          # 确保在 Flutter 根目录执行（仓库根目录即为 Flutter 根目录）
+          flutter pub get  # 拉取 Dart 依赖，生成 pubspec.lock
+          flutter precache ios  # 预下载 iOS 编译资源，加速构建
+          cd ios && flutter build ios --config-only  # 生成 Generated.xcconfig 关键文件
+
+      # 4. 安装 CocoaPods（确保版本兼容）
+      - name: 安装/升级 CocoaPods
+        run: |
+          # 安装指定版本 CocoaPods（避免版本兼容问题，可根据项目调整）
+          gem install cocoapods -v 1.12.1
+          pod --version
+
+      # 5. 安装 iOS 依赖（此时 Generated.xcconfig 已存在，可正常执行）
+      - name: 安装 iOS Pod 依赖
+        run: |
+          cd ios
+          pod install --repo-update
+
+      # 6. 配置 Xcode 版本（匹配 Flutter 兼容版本）
       - name: 配置 Xcode 版本
         uses: maxim-lobanov/setup-xcode@v1
         with:
-          xcode-version: latest-stable
+          xcode-version: latest-stable  # 或指定版本：15.0
 
-      - name: Flutter 依赖安装 & 生成 iOS 配置文件
-        run: |
-          # 进入 Flutter 根目录（关键：不是 ios 子目录！）
-          # 若仓库根目录就是 Flutter 工程，直接执行；否则调整 cd 路径
-          flutter pub get  # 生成 pubspec.lock 并拉取 Dart 依赖
-          flutter precache ios  # 预下载 iOS 相关编译资源（可选，加速构建）
-          # 生成 iOS 侧的 Generated.xcconfig 文件
-          cd ios && flutter build ios --config-only  # 仅生成配置，不完整编译
-
-      - name: 安装 iOS 依赖（CocoaPods）
-        run: |
-          cd ios  # 进入 iOS 子目录
-          pod install --repo-update  # 此时 Generated.xcconfig 已存在，可正常执行
-
-      - name: 构建并打包 IPA
+      # 7. 构建 iOS Debug 包（无签名，CI 环境专用）
+      - name: 构建 iOS Debug 包并导出 IPA
         run: |
           cd ios
-          # 清理缓存
-          xcodebuild clean -workspace ${{ secrets.XCODE_WORKSPACE }} -scheme ${{ secrets.XCODE_SCHEME }} -configuration Debug
-          # 归档 + 导出 IPA
-          xcodebuild archive -workspace ${{ secrets.XCODE_WORKSPACE }} -scheme ${{ secrets.XCODE_SCHEME }} -configuration Debug -archivePath ./build/CatFun.xcarchive
-          xcodebuild -exportArchive -archivePath ./build/CatFun.xcarchive -exportPath ./build/ipa -exportOptionsPlist ./ExportOptions.plist
+          # 定义项目关键参数（替换为你的项目实际名称）
+          XCODE_WORKSPACE="Runner.xcworkspace"  # Flutter 默认是 Runner.xcworkspace
+          XCODE_SCHEME="Runner"  # Flutter 默认是 Runner
+          
+          # 清理构建缓存
+          xcodebuild clean -workspace $XCODE_WORKSPACE -scheme $XCODE_SCHEME -configuration Debug
+          
+          # 归档项目（生成 xcarchive）
+          xcodebuild archive -workspace $XCODE_WORKSPACE -scheme $XCODE_SCHEME -configuration Debug \
+            -archivePath ./build/CatFun.xcarchive \
+            CODE_SIGNING_ALLOWED=NO  # 关闭代码签名，CI 环境无需签名
+          
+          # 导出 IPA（ExportOptions.plist 需提前放在 ios 目录）
+          xcodebuild -exportArchive -archivePath ./build/CatFun.xcarchive \
+            -exportPath ./build/ipa \
+            -exportOptionsPlist ./ExportOptions.plist \
+            CODE_SIGNING_ALLOWED=NO
 
+      # 8. 上传 IPA 产物（方便下载）
       - name: 上传 IPA 产物
         uses: actions/upload-artifact@v4
         with:
           name: ios-debug-ipa
           path: ios/build/ipa/*.ipa
-          retention-days: 7
+          retention-days: 7  # 产物保留7天
