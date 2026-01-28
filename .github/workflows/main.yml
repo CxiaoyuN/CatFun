@@ -1,35 +1,50 @@
-name: iOS Debug 打包
+name: iOS Debug 打包（Flutter 适配）
 
 on:
   push:
-    branches: [main]  # 触发分支，可自定义
+    branches: [main]
   pull_request:
     branches: [main]
-  workflow_dispatch:  # 手动触发
+  workflow_dispatch:
 
 jobs:
   build-ios:
-    runs-on: macos-latest  # 必须用 macOS 虚拟机
+    runs-on: macos-latest
     steps:
       - name: 拉取代码
         uses: actions/checkout@v4
 
+      - name: 安装 Flutter 环境
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: latest-stable  # 匹配项目使用的 Flutter 版本，如 3.16.0
+          channel: stable
+
       - name: 配置 Xcode 版本
         uses: maxim-lobanov/setup-xcode@v1
         with:
-          xcode-version: latest-stable  # 使用最新稳定版 Xcode
+          xcode-version: latest-stable
 
-      - name: 安装依赖（CocoaPods）
+      - name: Flutter 依赖安装 & 生成 iOS 配置文件
         run: |
-          cd ios  # 进入 iOS 项目目录（根据实际路径调整）
-          pod install --repo-update
+          # 进入 Flutter 根目录（关键：不是 ios 子目录！）
+          # 若仓库根目录就是 Flutter 工程，直接执行；否则调整 cd 路径
+          flutter pub get  # 生成 pubspec.lock 并拉取 Dart 依赖
+          flutter precache ios  # 预下载 iOS 相关编译资源（可选，加速构建）
+          # 生成 iOS 侧的 Generated.xcconfig 文件
+          cd ios && flutter build ios --config-only  # 仅生成配置，不完整编译
+
+      - name: 安装 iOS 依赖（CocoaPods）
+        run: |
+          cd ios  # 进入 iOS 子目录
+          pod install --repo-update  # 此时 Generated.xcconfig 已存在，可正常执行
 
       - name: 构建并打包 IPA
         run: |
           cd ios
-          # 清理构建缓存
+          # 清理缓存
           xcodebuild clean -workspace ${{ secrets.XCODE_WORKSPACE }} -scheme ${{ secrets.XCODE_SCHEME }} -configuration Debug
-          # 构建并导出 IPA
+          # 归档 + 导出 IPA
           xcodebuild archive -workspace ${{ secrets.XCODE_WORKSPACE }} -scheme ${{ secrets.XCODE_SCHEME }} -configuration Debug -archivePath ./build/CatFun.xcarchive
           xcodebuild -exportArchive -archivePath ./build/CatFun.xcarchive -exportPath ./build/ipa -exportOptionsPlist ./ExportOptions.plist
 
@@ -37,5 +52,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ios-debug-ipa
-          path: ios/build/ipa/*.ipa  # 产物路径（根据实际调整）
-          retention-days: 7  # 产物保留天数
+          path: ios/build/ipa/*.ipa
+          retention-days: 7
